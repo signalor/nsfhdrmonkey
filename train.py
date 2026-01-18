@@ -172,8 +172,11 @@ def train_step_with_accumulation(
 
     batch = batch.to(device)
 
-    # Forward pass
-    main_pred, aux_pred, intermediate = model.forward_with_intermediate(batch)
+    # Forward pass with intermediate outputs for loss computation
+    # Using forward() with return_intermediate=True works with DataParallel
+    main_pred, aux_pred, intermediate = model(
+        batch, augment=True, return_intermediate=True
+    )
 
     # Prepare targets (future timesteps only, matching model output shape)
     target = batch[:, 10:, :, 0]  # Main target (feature 0, future only)
@@ -228,7 +231,8 @@ def validate_model(
     with torch.no_grad():
         for batch in val_loader:
             batch = batch.to(device)
-            pred = model.predict(batch)
+            # Use forward() for DataParallel compatibility (predict() is not wrapped)
+            pred = model(batch, augment=False, return_intermediate=False)
             target = batch[:, :, :, 0]
 
             # Normalized MSE
@@ -300,16 +304,42 @@ def train_model(
         std=train_dataset.std,
     )
 
-    # Create data loaders
+    # Create data loaders with multiple workers for faster data loading
+    num_workers = min(4, os.cpu_count() or 1)
     train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=True, drop_last=True
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        drop_last=True,
+        num_workers=num_workers,
+        pin_memory=torch.cuda.is_available(),
     )
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=torch.cuda.is_available(),
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=torch.cuda.is_available(),
+    )
 
     # Create model
     model = create_model(n_channels, device, memory_efficient=memory_efficient)
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+
+    # Multi-GPU support with DataParallel
+    n_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    if n_gpus > 1:
+        print(f"Using DataParallel with {n_gpus} GPUs")
+        model = torch.nn.DataParallel(model)
+        # Scale batch size by number of GPUs for effective parallelization
+        # Note: DataParallel splits batch across GPUs automatically
 
     # Loss and optimizer
     loss_fn = EnhancedForecastingLoss(
@@ -349,7 +379,13 @@ def train_model(
 
     for epoch in range(num_epochs):
         model.train()
-        epoch_metrics = {"total": 0, "mse": 0, "temporal": 0}
+        epoch_metrics = {
+            "total_loss": 0,
+            "main_loss": 0,
+            "aux_loss": 0,
+            "consistency_loss": 0,
+            "intermediate_loss": 0,
+        }
         n_steps = 0
 
         optimizer.zero_grad()
@@ -388,7 +424,8 @@ def train_model(
         current_lr = optimizer.param_groups[0]["lr"]
         print(
             f"Epoch {epoch + 1:3d}/{num_epochs} | "
-            f"Train Loss: {epoch_metrics['total']:.6f} | "
+            f"Train Loss: {epoch_metrics['total_loss']:.6f} | "
+            f"Main: {epoch_metrics['main_loss']:.6f} | "
             f"Val MSE (norm): {val_mse_norm:.6f} | "
             f"Val MSE (raw): {val_mse_raw:.2f} | "
             f"LR: {current_lr:.2e}"
@@ -399,11 +436,12 @@ def train_model(
             best_val_mse = val_mse_norm
             patience_counter = 0
 
-            # Save best model
+            # Save best model (handle DataParallel wrapper)
+            model_to_save = model.module if hasattr(model, "module") else model
             torch.save(
                 {
                     "epoch": epoch,
-                    "model_state_dict": model.state_dict(),
+                    "model_state_dict": model_to_save.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "val_mse": val_mse_norm,
                     "n_channels": n_channels,
@@ -417,12 +455,13 @@ def train_model(
                 print(f"\nEarly stopping at epoch {epoch + 1}")
                 break
 
-    # Load best model
+    # Load best model (handle DataParallel wrapper)
     checkpoint = torch.load(
         os.path.join(save_dir, f"best_model_{monkey_name}.pth"),
         weights_only=False,  # Required for checkpoints containing numpy scalars
     )
-    model.load_state_dict(checkpoint["model_state_dict"])
+    model_to_load = model.module if hasattr(model, "module") else model
+    model_to_load.load_state_dict(checkpoint["model_state_dict"])
 
     # Final test evaluation
     test_mse_norm, test_mse_raw = validate_model(
@@ -492,9 +531,21 @@ def main():
     memory_efficient = True
     print(f"Memory efficient: {memory_efficient}, AMP: {use_amp}")
 
-    # Device
+    # Device and GPU info
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+
+    # Log GPU information
+    if torch.cuda.is_available():
+        n_gpus = torch.cuda.device_count()
+        print(f"Number of GPUs available: {n_gpus}")
+        for i in range(n_gpus):
+            gpu_name = torch.cuda.get_device_name(i)
+            gpu_mem = torch.cuda.get_device_properties(i).total_memory / (1024**3)
+            print(f"  GPU {i}: {gpu_name} ({gpu_mem:.1f} GB)")
+    else:
+        n_gpus = 0
+        print("No CUDA GPUs available, using CPU")
 
     # Train models
     monkeys = ["affi", "beignet"] if args.monkey == "all" else [args.monkey]

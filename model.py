@@ -1147,12 +1147,18 @@ class NeuralForecaster(nn.Module):
         self.augmentation = EnhancedDataAugmentation()
         self.tta = TestTimeAugmentation()
 
-    def forward(self, x: torch.Tensor, augment: bool = False) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, augment: bool = False, return_intermediate: bool = False
+    ) -> torch.Tensor:
         """
         Args:
             x: (batch, 20, channels, 9) - full sequence
+            augment: whether to apply data augmentation
+            return_intermediate: if True, returns (main_pred, aux_pred, intermediate)
+                                 for training loss computation
         Returns:
-            (batch, 20, channels) - prediction for feature 0
+            If return_intermediate=False: (batch, 20, channels) - prediction for feature 0
+            If return_intermediate=True: tuple of (main_pred, aux_pred, intermediate)
         """
         x_input = x[:, :10, :, :]
 
@@ -1164,8 +1170,11 @@ class NeuralForecaster(nn.Module):
 
         # Get predictions
         main_pred, aux_pred, intermediate = self.model(
-            x_input, return_intermediate=self.training
+            x_input, return_intermediate=return_intermediate or self.training
         )
+
+        if return_intermediate:
+            return main_pred, aux_pred, intermediate
 
         # Concatenate input and prediction
         input_feature0 = x[:, :10, :, 0]
@@ -1206,13 +1215,7 @@ class NeuralForecaster(nn.Module):
             aux_pred: (B, 10, C, F) - predicted all features for future timesteps
             intermediate: list of intermediate predictions (B, 10, C) each
         """
-        x_input = x[:, :10, :, :]
-
-        if self.training:
-            x_input = self.augmentation.channel_dropout(x_input, p=0.1)
-            x_input = self.augmentation.time_noise(x_input, std=0.03)
-
-        return self.model(x_input, return_intermediate=True)
+        return self.forward(x, augment=self.training, return_intermediate=True)
 
 
 # =============================================================================
