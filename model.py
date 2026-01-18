@@ -157,15 +157,21 @@ class ChannelAwarePositionalEncoding(nn.Module):
         B, T, C, D = x.shape
 
         # Combine temporal encodings
-        time_encoding = self.time_embed[:, :T, :, :].expand(B, -1, C, -1)
+        # Use contiguous() to ensure proper memory alignment for CUDA operations
+        time_encoding = self.time_embed[:, :T, :, :].expand(B, -1, C, -1).contiguous()
         if self.use_sinusoidal:
             time_encoding = torch.cat(
-                [time_encoding, self.sinusoidal_pe[:, :T, :, :].expand(B, -1, C, -1)],
+                [
+                    time_encoding,
+                    self.sinusoidal_pe[:, :T, :, :].expand(B, -1, C, -1).contiguous(),
+                ],
                 dim=-1,
-            )
+            ).contiguous()
 
         # Channel embeddings
-        channel_encoding = self.channel_embed[:, :, :C, :].expand(B, T, -1, -1)
+        channel_encoding = (
+            self.channel_embed[:, :, :C, :].expand(B, T, -1, -1).contiguous()
+        )
 
         # Channel relationship encoding
         relation_weights = self.channel_relation[:, :, :C, :C]  # (1, 1, C, C)
@@ -173,7 +179,10 @@ class ChannelAwarePositionalEncoding(nn.Module):
             relation_weights.squeeze(0).squeeze(0)
         )  # (C, d//4)
         relation_encoding = (
-            relation_encoding.unsqueeze(0).unsqueeze(0).expand(B, T, -1, -1)
+            relation_encoding.unsqueeze(0)
+            .unsqueeze(0)
+            .expand(B, T, -1, -1)
+            .contiguous()
         )
 
         # Combine all encodings
@@ -184,7 +193,7 @@ class ChannelAwarePositionalEncoding(nn.Module):
                 relation_encoding,
             ],
             dim=-1,
-        )
+        ).contiguous()
 
         # Project to d_model
         out = self.output_proj(combined)
@@ -248,27 +257,30 @@ class FrequencyBandAttention(nn.Module):
         B, T, C, F = x.shape
 
         # Reshape to process all (B*T*C) positions together
-        x_flat = x.reshape(B * T * C, F, 1)  # (B*T*C, F, 1)
+        # Use contiguous() to ensure proper memory alignment for CUDA operations
+        x_flat = x.reshape(B * T * C, F, 1).contiguous()  # (B*T*C, F, 1)
 
         # Embed each frequency band
         band_embeds = []
         for i, embed in enumerate(self.band_embeddings):
-            band_embeds.append(embed(x_flat[:, i : i + 1, :]))  # (B*T*C, 1, d_model)
+            band_embeds.append(
+                embed(x_flat[:, i : i + 1, :].contiguous())
+            )  # (B*T*C, 1, d_model)
 
-        freq_tokens = torch.cat(band_embeds, dim=1)  # (B*T*C, F, d_model)
+        freq_tokens = torch.cat(band_embeds, dim=1).contiguous()  # (B*T*C, F, d_model)
         freq_tokens = freq_tokens + self.freq_pos
 
         # Apply cross-frequency attention
         attn_out, _ = self.freq_attention(freq_tokens, freq_tokens, freq_tokens)
 
         # Flatten and project
-        attn_flat = attn_out.reshape(B * T * C, -1)  # (B*T*C, F*d_model)
+        attn_flat = attn_out.reshape(B * T * C, -1).contiguous()  # (B*T*C, F*d_model)
 
         # Gated fusion
         gate = self.gate(attn_flat)
         output = self.output_proj(attn_flat) * gate
 
-        return output.reshape(B, T, C, -1)
+        return output.reshape(B, T, C, -1).contiguous()
 
 
 # =============================================================================
@@ -348,15 +360,16 @@ class MultiScaleTemporalConv(nn.Module):
         B, T, C, D = x.shape
 
         # Process each channel independently
-        x = x.permute(0, 2, 3, 1).reshape(B * C, D, T)  # (B*C, D, T)
+        # Use contiguous() to ensure proper memory alignment for CUDA operations
+        x = x.permute(0, 2, 3, 1).reshape(B * C, D, T).contiguous()  # (B*C, D, T)
 
         # Apply multi-scale convolutions
         conv_outs = [conv(x) for conv in self.convs]
-        x = torch.cat(conv_outs, dim=1)  # (B*C, hidden_total, T)
+        x = torch.cat(conv_outs, dim=1).contiguous()  # (B*C, hidden_total, T)
 
-        x = x.transpose(1, 2)  # (B*C, T, hidden_total)
+        x = x.transpose(1, 2).contiguous()  # (B*C, T, hidden_total)
         x = self.proj(x)  # (B*C, T, D)
-        x = x.reshape(B, C, T, D).permute(0, 2, 1, 3)  # (B, T, C, D)
+        x = x.reshape(B, C, T, D).permute(0, 2, 1, 3).contiguous()  # (B, T, C, D)
 
         return self.norm(self.dropout(x))
 
@@ -387,7 +400,8 @@ class EnhancedSpatialAttention(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T, C, D = x.shape
-        x_flat = x.reshape(B * T, C, D)
+        # Use contiguous() to ensure proper memory alignment for CUDA operations
+        x_flat = x.reshape(B * T, C, D).contiguous()
 
         # Add relative position bias as 2D mask (C, C) - broadcasts across batch and heads
         attn_bias = self.rel_pos_bias[:, :C, :C].mean(dim=0)  # (C, C)
@@ -396,7 +410,7 @@ class EnhancedSpatialAttention(nn.Module):
         attn_out = self.dropout(attn_out)
         x_flat = self.norm(x_flat + attn_out)
 
-        return x_flat.reshape(B, T, C, D)
+        return x_flat.reshape(B, T, C, D).contiguous()
 
 
 class EnhancedTemporalAttention(nn.Module):
@@ -416,7 +430,8 @@ class EnhancedTemporalAttention(nn.Module):
 
     def forward(self, x: torch.Tensor, causal: bool = False) -> torch.Tensor:
         B, T, C, D = x.shape
-        x_flat = x.permute(0, 2, 1, 3).reshape(B * C, T, D)
+        # Use contiguous() to ensure proper memory alignment for CUDA operations
+        x_flat = x.permute(0, 2, 1, 3).reshape(B * C, T, D).contiguous()
 
         # Create attention mask
         if causal:
@@ -429,7 +444,7 @@ class EnhancedTemporalAttention(nn.Module):
         attn_out = self.dropout(attn_out)
         x_flat = self.norm(x_flat + attn_out)
 
-        return x_flat.reshape(B, C, T, D).permute(0, 2, 1, 3)
+        return x_flat.reshape(B, C, T, D).permute(0, 2, 1, 3).contiguous()
 
 
 class EnhancedSpatialTemporalBlock(nn.Module):
@@ -483,8 +498,9 @@ class EnhancedSpatialTemporalBlock(nn.Module):
 
         # Feed-forward with gated residual
         B, T, C, D = x.shape
-        x_flat = x.reshape(B * T * C, D)
-        ff_out = self.ff(x_flat).reshape(B, T, C, D)
+        # Use contiguous() to ensure proper memory alignment for CUDA operations
+        x_flat = x.reshape(B * T * C, D).contiguous()
+        ff_out = self.ff(x_flat).reshape(B, T, C, D).contiguous()
         ff_out = self.ff_norm(ff_out)
         x = self.gate3(ff_out, x)
 
@@ -620,8 +636,9 @@ class DecoderLayer(nn.Module):
         B, T_fut, C, D = x.shape
         _, T_enc, _, _ = encoder_output.shape
 
-        x_flat = x.reshape(B, T_fut * C, D)
-        enc_flat = encoder_output.reshape(B, T_enc * C, D)
+        # Use contiguous() to ensure proper memory alignment for CUDA operations
+        x_flat = x.reshape(B, T_fut * C, D).contiguous()
+        enc_flat = encoder_output.reshape(B, T_enc * C, D).contiguous()
 
         # Self attention
         attn_out, _ = self.self_attn(x_flat, x_flat, x_flat)
@@ -634,7 +651,7 @@ class DecoderLayer(nn.Module):
         # Feed-forward
         x_flat = self.norm3(x_flat + self.ff(x_flat))
 
-        return x_flat.reshape(B, T_fut, C, D)
+        return x_flat.reshape(B, T_fut, C, D).contiguous()
 
 
 # =============================================================================
@@ -686,25 +703,26 @@ class EnhancedFeatureEmbedding(nn.Module):
         Returns:
             (batch, time, channels, d_model)
         """
-        target = x[..., 0:1]
-        freq_bands = x[..., 1:]
+        # Use contiguous() to ensure proper memory alignment for CUDA operations
+        target = x[..., 0:1].contiguous()
+        freq_bands = x[..., 1:].contiguous()
 
         # Embed target and frequency bands
         target_emb = self.target_proj(target)
         freq_emb = self.freq_proj(freq_bands)
-        simple_embed = torch.cat([target_emb, freq_emb], dim=-1)
+        simple_embed = torch.cat([target_emb, freq_emb], dim=-1).contiguous()
 
         # Get frequency attention embedding
         freq_attn_embed = self.freq_attention(x)
 
         # Combine embeddings
-        combined = torch.cat([simple_embed, freq_attn_embed], dim=-1)
+        combined = torch.cat([simple_embed, freq_attn_embed], dim=-1).contiguous()
 
         # Gated fusion
         gate = self.gate(combined)
         output = self.fusion(combined) * gate + simple_embed * (1 - gate)
 
-        return output
+        return output.contiguous()
 
 
 # =============================================================================
@@ -801,10 +819,13 @@ class EnhancedSpatialTemporalForecaster(nn.Module):
         B, T, C, F = x.shape
 
         # Apply RevIN normalization
+        # Use contiguous() to ensure proper memory alignment for CUDA operations
         if self.use_revin:
-            x_target = x[..., 0]
+            x_target = x[..., 0].contiguous()
             x_target = self.revin(x_target, mode="norm")
-            x = torch.cat([x_target.unsqueeze(-1), x[..., 1:]], dim=-1)
+            x = torch.cat(
+                [x_target.unsqueeze(-1), x[..., 1:].contiguous()], dim=-1
+            ).contiguous()
 
         # Feature embedding with frequency attention
         x = self.feature_embed(x)
@@ -820,8 +841,8 @@ class EnhancedSpatialTemporalForecaster(nn.Module):
         decoded, intermediate = self.decoder(x, return_intermediate)
 
         # Project to outputs
-        main_output = self.output_proj(decoded).squeeze(-1)
-        aux_output = self.aux_output_proj(decoded)
+        main_output = self.output_proj(decoded).squeeze(-1).contiguous()
+        aux_output = self.aux_output_proj(decoded).contiguous()
 
         # Apply RevIN denormalization
         if self.use_revin:
@@ -1167,7 +1188,8 @@ class NeuralForecaster(nn.Module):
             If return_intermediate=False: (batch, 20, channels) - prediction for feature 0
             If return_intermediate=True: tuple of (main_pred, aux_pred, intermediate)
         """
-        x_input = x[:, :10, :, :]
+        # Use contiguous() to ensure proper memory alignment for CUDA operations
+        x_input = x[:, :10, :, :].contiguous()
 
         # Apply augmentation during training
         if augment and self.training:
@@ -1184,8 +1206,8 @@ class NeuralForecaster(nn.Module):
             return main_pred, aux_pred, intermediate
 
         # Concatenate input and prediction
-        input_feature0 = x[:, :10, :, 0]
-        full_pred = torch.cat([input_feature0, main_pred], dim=1)
+        input_feature0 = x[:, :10, :, 0].contiguous()
+        full_pred = torch.cat([input_feature0, main_pred], dim=1).contiguous()
 
         return full_pred
 
