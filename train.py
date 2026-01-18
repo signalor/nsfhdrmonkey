@@ -276,6 +276,7 @@ def train_model(
     memory_efficient: bool = True,
     use_amp: bool = False,
     save_dir: str = "./checkpoints",
+    multi_gpu: bool = False,
 ) -> NeuralForecaster:
     """Train model for a specific monkey."""
 
@@ -333,15 +334,19 @@ def train_model(
     model = create_model(n_channels, device, memory_efficient=memory_efficient)
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
 
-    # Multi-GPU support with DataParallel
+    # Multi-GPU support with DataParallel (disabled by default due to potential issues)
     n_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
-    if n_gpus > 1:
+    if n_gpus > 1 and multi_gpu:
         print(f"Using DataParallel with {n_gpus} GPUs")
         # Convert any remaining BatchNorm layers to SyncBatchNorm for multi-GPU
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         model = torch.nn.DataParallel(model)
         # Scale batch size by number of GPUs for effective parallelization
         # Note: DataParallel splits batch across GPUs automatically
+    elif n_gpus > 1:
+        print(
+            f"Multiple GPUs detected ({n_gpus}) but multi-GPU disabled. Use --multi_gpu to enable."
+        )
 
     # Loss and optimizer
     loss_fn = EnhancedForecastingLoss(
@@ -502,6 +507,11 @@ def main():
         choices=["all", "affi", "beignet"],
         help="Which monkey to train",
     )
+    parser.add_argument(
+        "--multi_gpu",
+        action="store_true",
+        help="Enable multi-GPU training with DataParallel (may cause issues on some systems)",
+    )
     args = parser.parse_args()
 
     # System info
@@ -573,6 +583,7 @@ def main():
                 memory_efficient=memory_efficient,
                 use_amp=use_amp,
                 save_dir=args.save_dir,
+                multi_gpu=args.multi_gpu,
             )
 
             print(f"\nCompleted training for {monkey}")
