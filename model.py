@@ -1199,7 +1199,13 @@ class NeuralForecaster(nn.Module):
     def forward_with_intermediate(
         self, x: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, List[torch.Tensor]]:
-        """Forward pass returning intermediate predictions for loss computation."""
+        """Forward pass returning intermediate predictions for loss computation.
+
+        Returns:
+            main_pred: (B, 10, C) - predicted feature 0 for future timesteps only
+            aux_pred: (B, 10, C, F) - predicted all features for future timesteps
+            intermediate: list of intermediate predictions (B, 10, C) each
+        """
         x_input = x[:, :10, :, :]
 
         if self.training:

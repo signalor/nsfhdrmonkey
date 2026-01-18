@@ -175,8 +175,8 @@ def train_step_with_accumulation(
     # Forward pass
     main_pred, aux_pred, intermediate = model.forward_with_intermediate(batch)
 
-    # Prepare targets
-    target = batch[:, :, :, 0]  # Main target (feature 0)
+    # Prepare targets (future timesteps only, matching model output shape)
+    target = batch[:, 10:, :, 0]  # Main target (feature 0, future only)
     aux_target = batch[:, 10:, :, :]  # Auxiliary target (all features, future only)
 
     # Compute loss
@@ -483,8 +483,10 @@ def main():
     print(f"Effective batch size: {batch_size * accumulation_steps}")
 
     # Memory efficient mode for low memory systems
-    memory_efficient = avail_mem < 16
-    use_amp = torch.cuda.is_available() and avail_mem < 12
+    # memory_efficient = avail_mem < 16
+    # use_amp = torch.cuda.is_available() and avail_mem < 12
+    use_amp = True
+    memory_efficient = True
     print(f"Memory efficient: {memory_efficient}, AMP: {use_amp}")
 
     # Device
