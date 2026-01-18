@@ -720,8 +720,8 @@ def get_memory_limit_config() -> dict:
 
     # Use memory-efficient model for GPUs with less than 24GB
     # The full model needs ~18GB+ for forward/backward pass
-    memory_efficient = gpu_memory_gb < 24 if torch.cuda.is_available() else True
-
+    # memory_efficient = gpu_memory_gb < 24 if torch.cuda.is_available() else True
+    memory_efficient = False;
     print(
         f"Using batch_size={batch_size} with {grad_accum_steps} gradient accumulation steps"
     )
@@ -752,11 +752,11 @@ def main():
         "batch_size": mem_config["batch_size"],
         "grad_accum_steps": mem_config["grad_accum_steps"],
         # Training
-        "num_epochs": 50,
-        "learning_rate": 3e-4,
-        "min_lr": 1e-6,
+        "num_epochs": 100,
+        "learning_rate": 3e-3,
+        "min_lr": 1e-7,
         "weight_decay": 0.01,
-        "warmup_epochs": 10,
+        "warmup_epochs": 20,
         "patience": 10,
         # Loss weights
         "aux_weight": 0.3,

@@ -711,7 +711,7 @@ class NeuralForecaster(nn.Module):
             n_decoder_layers=n_decoder_layers,
             d_ff=d_ff,
             dropout=0.15,
-            use_revin=False,
+            use_revin=True,
         )
 
         self.augmentation = NeuralDataAugmentation()

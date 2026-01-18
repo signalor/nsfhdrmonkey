@@ -434,11 +434,17 @@ class Model(torch.nn.Module):
             raise ValueError(f"No such a monkey: {self.monkey_name}")
 
         # Memory-efficient model configuration
-        d_model = 128
+        '''d_model = 128
         n_heads = 4
         n_encoder_layers = 2
         n_decoder_layers = 1
-        d_ff = 256
+        d_ff = 256'''
+        # Memory-not efficient (beast mode type type type)
+        d_model = 256
+        n_heads = 8
+        n_encoder_layers = 4
+        n_decoder_layers = 2
+        d_ff = 1024
 
         self.model = SpatialTemporalForecaster(
             n_channels=self.n_channels,
