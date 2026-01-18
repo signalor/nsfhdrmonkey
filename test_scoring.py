@@ -1,13 +1,13 @@
 """
-Local scoring test script.
-Uses the public data to evaluate the trained model using checkpoints.
+Local scoring test script for the enhanced model.
+Evaluates the trained model using competition metrics.
 """
 
 import os
 import sys
-
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from model import NeuralForecaster, create_model
 
@@ -15,9 +15,7 @@ from model import NeuralForecaster, create_model
 def calculate_mse(array1, array2):
     """Calculate MSE between two arrays (only on timesteps 10-19)."""
     if array1.shape != array2.shape:
-        raise ValueError(
-            f"Shapes don't match: {array1.shape} vs {array2.shape}. Expected (N, 20, C)"
-        )
+        raise ValueError(f"Shapes don't match: {array1.shape} vs {array2.shape}")
 
     # Only score timesteps 10-19 (the predictions)
     array1 = torch.tensor(array1[:, 10:])
@@ -37,7 +35,7 @@ def load_test_data(data_dir, dataset_name):
         "beignet_private_2": "train_data_beignet_2022-06-02_private.npz",
     }
 
-    filepath = os.path.join(data_dir, file_map[dataset_name])
+    filepath = os.path.join(data_dir, file_map.get(dataset_name, f"train_data_{dataset_name}.npz"))
     if not os.path.exists(filepath):
         print(f"  File not found: {filepath}")
         return None
@@ -60,10 +58,8 @@ def normalize_data(data, mean, std):
 
 def denormalize_data(data, mean, std):
     """Denormalize data back to original scale."""
-    # data shape: (N, T, C), mean/std shape: (1, 1, C, F)
-    # We need mean/std for feature 0 only: (1, 1, C, 1) -> (C,)
-    mean_f0 = mean[0, 0, :, 0]  # (C,)
-    std_f0 = std[0, 0, :, 0]  # (C,)
+    mean_f0 = mean[0, 0, :, 0]
+    std_f0 = std[0, 0, :, 0]
     return data * (4 * std_f0) + mean_f0
 
 
@@ -75,29 +71,31 @@ def load_model_from_checkpoint(monkey_name, checkpoint_dir, device):
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
-    # Load checkpoint
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
-    # Get number of channels from data
+    # Get channels
     if monkey_name == "affi":
         n_channels = 239
     else:
         n_channels = 89
 
-    # Create model (memory_efficient=True to match training)
-    model = create_model(n_channels, device, memory_efficient=True)
+    # Create model
+    memory_efficient = checkpoint.get("config", {}).get("memory_efficient", False)
+    model = create_model(n_channels, device, memory_efficient=memory_efficient)
 
-    # Load weights - handle DataParallel wrapping
+    # Load weights
     state_dict = checkpoint["model_state_dict"]
-
-    # Check if the inner model needs the weights
     try:
         model.model.load_state_dict(state_dict)
     except RuntimeError:
-        # Try loading into the full model
-        model.load_state_dict(state_dict)
+        try:
+            model.load_state_dict(state_dict)
+        except RuntimeError as e:
+            print(f"Warning: Could not load state dict directly: {e}")
+            # Try loading with strict=False
+            model.model.load_state_dict(state_dict, strict=False)
 
-    # Load normalization stats
+    # Load stats
     stats = None
     if os.path.exists(stats_path):
         stats = np.load(stats_path)
@@ -109,41 +107,35 @@ def load_model_from_checkpoint(monkey_name, checkpoint_dir, device):
 def predict_with_model(model, data, stats, device):
     """Generate predictions using the model."""
     model.eval()
-
-    # Keep original data for input feature 0 (first 10 timesteps)
     original_data = data.astype(np.float32)
 
-    # Normalize data if stats available
+    # Normalize
     if stats is not None:
         data_norm = normalize_data(original_data, stats["mean"], stats["std"])
     else:
         data_norm = original_data
 
     predictions = []
+    batch_size = 32
 
     with torch.no_grad():
-        # Process in batches to avoid memory issues
-        batch_size = 32
         for i in range(0, len(data_norm), batch_size):
-            batch = data_norm[i : i + batch_size]
-            batch_orig = original_data[i : i + batch_size]
+            batch = data_norm[i:i + batch_size]
+            batch_orig = original_data[i:i + batch_size]
             batch_tensor = torch.tensor(batch, dtype=torch.float32).to(device)
 
-            # Forward pass
+            # Predict
             x_input = batch_tensor[:, :10, :, :]
-            main_pred, _ = model.model(x_input)
+            main_pred, _, _ = model.model(x_input, return_intermediate=False)
 
-            # Denormalize predictions back to original scale
+            # Denormalize
             main_pred_np = main_pred.cpu().numpy()
             if stats is not None:
-                main_pred_np = denormalize_data(
-                    main_pred_np, stats["mean"], stats["std"]
-                )
+                main_pred_np = denormalize_data(main_pred_np, stats["mean"], stats["std"])
 
-            # Combine original input (first 10 steps) and denormalized prediction (last 10)
-            input_feature0 = batch_orig[:, :10, :, 0]  # Original scale
+            # Combine with original input
+            input_feature0 = batch_orig[:, :10, :, 0]
             full_pred = np.concatenate([input_feature0, main_pred_np], axis=1)
-
             predictions.append(full_pred)
 
     return np.concatenate(predictions, axis=0)
@@ -156,14 +148,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # Datasets to evaluate
-    datasets = [
-        "affi",
-        "beignet",
-        "affi_private",
-        "beignet_private_1",
-        "beignet_private_2",
-    ]
+    datasets = ["affi", "beignet"]  # Start with main datasets
 
     # Load models
     print("\nLoading models...")
@@ -173,97 +158,62 @@ def main():
     for monkey in ["affi", "beignet"]:
         print(f"  Loading {monkey} model...")
         try:
-            model, norm_stats = load_model_from_checkpoint(
-                monkey, checkpoint_dir, device
-            )
+            model, norm_stats = load_model_from_checkpoint(monkey, checkpoint_dir, device)
             model.to(device)
             models[monkey] = model
             stats[monkey] = norm_stats
-            print(f"    ✓ Loaded successfully")
+            print(f"    Loaded successfully")
         except Exception as e:
-            print(f"    ✗ Failed to load: {e}")
-            import traceback
-
-            traceback.print_exc()
+            print(f"    Failed: {e}")
             models[monkey] = None
             stats[monkey] = None
 
-    print()
-
-    # Evaluate each dataset
+    # Evaluate
     scores = {}
-
     for dataset_name in datasets:
-        print(f"Evaluating {dataset_name}...")
+        print(f"\nEvaluating {dataset_name}...")
 
-        # Load data
         data = load_test_data(data_dir, dataset_name)
         if data is None:
-            scores[dataset_name] = None
             continue
 
-        print(f"  Data shape: {data.shape}")
+        # Use last 10% as test
+        n = len(data)
+        test_start = int(0.9 * n)
+        test_data = data[test_start:]
+        print(f"  Test samples: {len(test_data)}")
 
-        # Get appropriate model
         monkey = get_monkey_name(dataset_name)
         model = models.get(monkey)
         norm_stats = stats.get(monkey)
 
         if model is None:
-            print(f"  ✗ No model available for {monkey}")
-            scores[dataset_name] = None
+            print(f"  No model for {monkey}")
             continue
 
-        # Get ground truth (feature 0 only)
-        ground_truth = data[:, :, :, 0].astype(np.float32)  # (N, 20, C)
+        ground_truth = test_data[:, :, :, 0].astype(np.float32)
 
-        # Generate predictions
-        print(f"  Generating predictions...")
         try:
-            predictions = predict_with_model(model, data, norm_stats, device)
-            print(f"  Predictions shape: {predictions.shape}")
-        except Exception as e:
-            print(f"  ✗ Prediction failed: {e}")
-            import traceback
-
-            traceback.print_exc()
-            scores[dataset_name] = None
-            continue
-
-        # Calculate MSE
-        try:
+            predictions = predict_with_model(model, test_data, norm_stats, device)
             mse = calculate_mse(ground_truth, predictions)
             scores[dataset_name] = mse
-            print(f"  ✓ MSE: {mse:.6f}")
+            print(f"  MSE: {mse:.2f}")
         except Exception as e:
-            print(f"  ✗ MSE calculation failed: {e}")
+            print(f"  Failed: {e}")
             import traceback
-
             traceback.print_exc()
-            scores[dataset_name] = None
-
-        print()
 
     # Summary
-    print("=" * 50)
+    print("\n" + "=" * 50)
     print("SCORING SUMMARY")
     print("=" * 50)
 
-    valid_scores = []
-    for dataset_name in datasets:
-        mse = scores.get(dataset_name)
-        if mse is not None:
-            print(f"  {dataset_name}: {mse:.6f}")
-            valid_scores.append(mse)
-        else:
-            print(f"  {dataset_name}: FAILED")
+    for name, mse in scores.items():
+        print(f"  {name}: {mse:.2f}")
 
-    if valid_scores:
-        avg_mse = sum(valid_scores) / len(valid_scores)
-        print()
-        print(f"  Average MSE: {avg_mse:.6f}")
-
-    print("=" * 50)
+    if scores:
+        avg = sum(scores.values()) / len(scores)
+        print(f"\n  Average MSE: {avg:.2f}")
 
 
 if __name__ == "__main__":

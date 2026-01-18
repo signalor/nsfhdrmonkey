@@ -1,0 +1,48 @@
+(.venv) PS C:\Users\matfu\Documents\programming\monkey> py train.py public_data/postprocessed_dataset
+System RAM: 31.4 GB total, 16.0 GB available
+Batch size: 4, Grad accum: 8
+Effective batch size: 32
+Memory efficient: True, AMP: False
+Using device: cpu
+
+============================================================
+Training model for affi
+============================================================
+Data shapes for affi:
+  Train: (788, 20, 239, 9)
+  Val: (98, 20, 239, 9)
+  Test: (99, 20, 239, 9)
+Detected 239 channels
+Model parameters: 2,304,646
+Error training affi: EnhancedForecastingLoss.__init__() got an unexpected keyword argument 'mse_weight'
+Traceback (most recent call last):
+  File "C:\Users\matfu\Documents\programming\monkey\train.py", line 508, in main
+    model = train_model(
+            ^^^^^^^^^^^^
+  File "C:\Users\matfu\Documents\programming\monkey\train.py", line 316, in train_model
+    loss_fn = EnhancedForecastingLoss(
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: EnhancedForecastingLoss.__init__() got an unexpected keyword argument 'mse_weight'
+
+============================================================
+Training model for beignet
+============================================================
+Data shapes for beignet:
+  Train: (560, 20, 89, 9)
+  Val: (70, 20, 89, 9)
+  Test: (70, 20, 89, 9)
+Detected 89 channels
+Model parameters: 1,645,546
+Error training beignet: EnhancedForecastingLoss.__init__() got an unexpected keyword argument 'mse_weight'
+Traceback (most recent call last):
+  File "C:\Users\matfu\Documents\programming\monkey\train.py", line 508, in main
+    model = train_model(
+            ^^^^^^^^^^^^
+  File "C:\Users\matfu\Documents\programming\monkey\train.py", line 316, in train_model
+    loss_fn = EnhancedForecastingLoss(
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: EnhancedForecastingLoss.__init__() got an unexpected keyword argument 'mse_weight'
+
+============================================================
+Training complete!
+============================================================
