@@ -320,8 +320,12 @@ class MultiScaleTemporalConv(nn.Module):
             for d in dilations:
                 padding = (k - 1) * d // 2
                 # Use GroupNorm instead of BatchNorm for DataParallel compatibility
-                # GroupNorm with num_groups=1 is equivalent to LayerNorm over channels
-                num_groups = min(8, hidden_per_scale)
+                # Find a valid num_groups that divides hidden_per_scale
+                num_groups = 1
+                for g in [8, 4, 2, 1]:
+                    if hidden_per_scale % g == 0:
+                        num_groups = g
+                        break
                 self.convs.append(
                     nn.Sequential(
                         nn.Conv1d(
