@@ -1,0 +1,15 @@
+checkpoints
+legacy
+node_modules
+public_data/postprocessed_data
+public_data/__MACOSX
+public_data/*.npy
+public.data/*.npz
+.venv
+__pycache__
+package-lock.json
+*.npz
+*.npy
+bun.lock
+*.pth
+*.zip
