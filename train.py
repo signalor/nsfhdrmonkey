@@ -341,7 +341,7 @@ def train_model(
     if n_gpus > 1 and multi_gpu:
         print(f"Using DataParallel with {n_gpus} GPUs")
         # Convert any remaining BatchNorm layers to SyncBatchNorm for multi-GPU
-        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+        # model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model) # This can be unstable with DataParallel
         model = torch.nn.DataParallel(model)
         # Scale batch size by number of GPUs for effective parallelization
         # Note: DataParallel splits batch across GPUs automatically
