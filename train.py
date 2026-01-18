@@ -418,7 +418,10 @@ def train_model(
                 break
 
     # Load best model
-    checkpoint = torch.load(os.path.join(save_dir, f"best_model_{monkey_name}.pth"))
+    checkpoint = torch.load(
+        os.path.join(save_dir, f"best_model_{monkey_name}.pth"),
+        weights_only=False,  # Required for checkpoints containing numpy scalars
+    )
     model.load_state_dict(checkpoint["model_state_dict"])
 
     # Final test evaluation
