@@ -319,6 +319,7 @@ def train_model(
         val_dataset,
         batch_size=batch_size,
         shuffle=False,
+        drop_last=multi_gpu,  # Drop last batch if using multi-GPU to avoid errors
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
     )
@@ -326,6 +327,7 @@ def train_model(
         test_dataset,
         batch_size=batch_size,
         shuffle=False,
+        drop_last=multi_gpu,  # Drop last batch if using multi-GPU
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
     )
