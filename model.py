@@ -319,13 +319,16 @@ class MultiScaleTemporalConv(nn.Module):
         for k in kernel_sizes:
             for d in dilations:
                 padding = (k - 1) * d // 2
+                # Use GroupNorm instead of BatchNorm for DataParallel compatibility
+                # GroupNorm with num_groups=1 is equivalent to LayerNorm over channels
+                num_groups = min(8, hidden_per_scale)
                 self.convs.append(
                     nn.Sequential(
                         nn.Conv1d(
                             d_model, hidden_per_scale, k, padding=padding, dilation=d
                         ),
                         nn.GELU(),
-                        nn.BatchNorm1d(hidden_per_scale),
+                        nn.GroupNorm(num_groups, hidden_per_scale),
                     )
                 )
 

@@ -337,6 +337,8 @@ def train_model(
     n_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
     if n_gpus > 1:
         print(f"Using DataParallel with {n_gpus} GPUs")
+        # Convert any remaining BatchNorm layers to SyncBatchNorm for multi-GPU
+        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         model = torch.nn.DataParallel(model)
         # Scale batch size by number of GPUs for effective parallelization
         # Note: DataParallel splits batch across GPUs automatically
@@ -580,6 +582,11 @@ def main():
             import traceback
 
             traceback.print_exc()
+
+        # Clear CUDA memory between trainings to avoid memory issues
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
 
     print("\n" + "=" * 60)
     print("Training complete!")
