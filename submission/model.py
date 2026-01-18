@@ -13,11 +13,11 @@ Key improvements over baseline:
 """
 
 import math
+from typing import Dict, List, Optional, Tuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Optional, Tuple, List, Dict
-
 
 # =============================================================================
 # Component 1: Enhanced Reversible Instance Normalization (RevIN)
@@ -34,11 +34,11 @@ class EnhancedRevIN(nn.Module):
     """
 
     def __init__(
-        self, 
-        n_channels: int, 
-        affine: bool = True, 
+        self,
+        n_channels: int,
+        affine: bool = True,
         subtract_last: bool = True,
-        eps: float = 1e-5
+        eps: float = 1e-5,
     ):
         super().__init__()
         self.n_channels = n_channels
@@ -72,11 +72,11 @@ class EnhancedRevIN(nn.Module):
     def _get_statistics(self, x: torch.Tensor):
         """Compute and store normalization statistics."""
         dim2reduce = (1,)  # Reduce over time dimension
-        
+
         if self.subtract_last:
             # Use last timestep as reference (helps with non-stationary data)
             self.last = x[:, -1:, :].detach()
-        
+
         self.mean = torch.mean(x, dim=dim2reduce, keepdim=True).detach()
         self.stdev = torch.sqrt(
             torch.var(x, dim=dim2reduce, keepdim=True, unbiased=False) + self.eps
@@ -111,29 +111,31 @@ class ChannelAwarePositionalEncoding(nn.Module):
     - Temporal position (sinusoidal + learnable)
     - Channel identity (learnable embeddings)
     - Channel-channel relationships (learnable pairwise)
-    
+
     FIXED: Proper tensor dimension handling in forward pass
     """
 
     def __init__(
-        self, 
-        max_time: int, 
-        max_channels: int, 
+        self,
+        max_time: int,
+        max_channels: int,
         d_model: int,
-        use_sinusoidal: bool = True
+        use_sinusoidal: bool = True,
     ):
         super().__init__()
         self.d_model = d_model
         self.max_time = max_time
         self.max_channels = max_channels
         self.use_sinusoidal = use_sinusoidal
-        
+
         # Learnable temporal embeddings
         self.time_embed = nn.Parameter(torch.randn(1, max_time, 1, d_model) * 0.02)
-        
-        # Learnable channel embeddings  
-        self.channel_embed = nn.Parameter(torch.randn(1, 1, max_channels, d_model) * 0.02)
-        
+
+        # Learnable channel embeddings
+        self.channel_embed = nn.Parameter(
+            torch.randn(1, 1, max_channels, d_model) * 0.02
+        )
+
         # Optional sinusoidal encoding for time
         if use_sinusoidal:
             self._init_sinusoidal(max_time, d_model)
@@ -142,16 +144,18 @@ class ChannelAwarePositionalEncoding(nn.Module):
         """Initialize sinusoidal positional encoding."""
         pe = torch.zeros(max_time, d_model)
         position = torch.arange(0, max_time, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+        )
+
         pe[:, 0::2] = torch.sin(position * div_term)
         if d_model % 2 == 0:
             pe[:, 1::2] = torch.cos(position * div_term)
         else:
             pe[:, 1::2] = torch.cos(position * div_term[:-1])
-        
+
         # Shape: (1, max_time, 1, d_model)
-        self.register_buffer('sinusoidal_pe', pe.unsqueeze(0).unsqueeze(2))
+        self.register_buffer("sinusoidal_pe", pe.unsqueeze(0).unsqueeze(2))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -161,18 +165,18 @@ class ChannelAwarePositionalEncoding(nn.Module):
             x with positional encoding added: (batch, time, channels, d_model)
         """
         B, T, C, D = x.shape
-        
+
         # Get time encoding - broadcast across channels
         time_enc = self.time_embed[:, :T, :, :]  # (1, T, 1, D)
-        
+
         if self.use_sinusoidal:
             # Add sinusoidal component to learnable time embedding
             sinusoidal = self.sinusoidal_pe[:, :T, :, :]  # (1, T, 1, D)
             time_enc = time_enc + sinusoidal
-        
+
         # Get channel encoding - broadcast across time
         channel_enc = self.channel_embed[:, :, :C, :]  # (1, 1, C, D)
-        
+
         # Add encodings - broadcasting handles dimension expansion
         # time_enc: (1, T, 1, D) broadcasts to (B, T, C, D)
         # channel_enc: (1, 1, C, D) broadcasts to (B, T, C, D)
@@ -191,52 +195,43 @@ class EnhancedFeatureEmbedding(nn.Module):
     """
 
     def __init__(
-        self, 
-        n_features: int, 
-        d_model: int, 
-        n_heads: int = 4,
-        dropout: float = 0.1
+        self, n_features: int, d_model: int, n_heads: int = 4, dropout: float = 0.1
     ):
         super().__init__()
         self.n_features = n_features
         self.d_model = d_model
-        
+
         # Separate projections for target and frequency bands
         self.target_proj = nn.Sequential(
-            nn.Linear(1, d_model // 2),
-            nn.GELU(),
-            nn.Linear(d_model // 2, d_model // 2)
+            nn.Linear(1, d_model // 2), nn.GELU(), nn.Linear(d_model // 2, d_model // 2)
         )
-        
+
         # Project each frequency band individually
         self.n_freq_bands = n_features - 1
         self.freq_proj = nn.Sequential(
             nn.Linear(self.n_freq_bands, d_model),
             nn.GELU(),
-            nn.Linear(d_model, d_model // 2)
+            nn.Linear(d_model, d_model // 2),
         )
-        
+
         # Cross-frequency attention
         self.freq_attention = nn.MultiheadAttention(
             embed_dim=d_model // 2,
             num_heads=max(1, n_heads),
             dropout=dropout,
-            batch_first=True
+            batch_first=True,
         )
-        
+
         # Gated fusion
-        self.gate = nn.Sequential(
-            nn.Linear(d_model, d_model),
-            nn.Sigmoid()
-        )
-        
+        self.gate = nn.Sequential(nn.Linear(d_model, d_model), nn.Sigmoid())
+
         # Final projection
         self.fusion = nn.Sequential(
             nn.Linear(d_model, d_model),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_model, d_model),
-            nn.LayerNorm(d_model)
+            nn.LayerNorm(d_model),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -247,31 +242,36 @@ class EnhancedFeatureEmbedding(nn.Module):
             (batch, time, channels, d_model)
         """
         B, T, C, F = x.shape
-        
+
         # Extract target and frequency bands
-        target = x[..., 0:1]  # (B, T, C, 1)
-        freq_bands = x[..., 1:]  # (B, T, C, n_freq_bands)
-        
+        # Use contiguous() to ensure proper memory alignment for CUDA operations
+        target = x[..., 0:1].contiguous()  # (B, T, C, 1)
+        freq_bands = x[..., 1:].contiguous()  # (B, T, C, n_freq_bands)
+
         # Project target
         target_emb = self.target_proj(target)  # (B, T, C, d_model//2)
-        
+
         # Project frequency bands
         freq_emb = self.freq_proj(freq_bands)  # (B, T, C, d_model//2)
-        
+
         # Apply frequency attention (reshape for attention)
         # Treat each (time, channel) position as a sequence element
-        freq_flat = freq_emb.reshape(B, T * C, -1)  # (B, T*C, d_model//2)
+        freq_flat = freq_emb.reshape(B, T * C, -1).contiguous()  # (B, T*C, d_model//2)
         freq_attended, _ = self.freq_attention(freq_flat, freq_flat, freq_flat)
-        freq_attended = freq_attended.reshape(B, T, C, -1)  # (B, T, C, d_model//2)
-        
+        freq_attended = freq_attended.reshape(
+            B, T, C, -1
+        ).contiguous()  # (B, T, C, d_model//2)
+
         # Combine with gated fusion
-        combined = torch.cat([target_emb, freq_attended], dim=-1)  # (B, T, C, d_model)
+        combined = torch.cat(
+            [target_emb, freq_attended], dim=-1
+        ).contiguous()  # (B, T, C, d_model)
         gate = self.gate(combined)
-        
+
         # Apply fusion with residual
         output = self.fusion(combined * gate + combined * (1 - gate))
-        
-        return output
+
+        return output.contiguous()
 
 
 # =============================================================================
@@ -281,14 +281,11 @@ class EnhancedFeatureEmbedding(nn.Module):
 
 class GatedResidual(nn.Module):
     """Gated residual connection for adaptive skip connections."""
-    
+
     def __init__(self, d_model: int):
         super().__init__()
-        self.gate = nn.Sequential(
-            nn.Linear(d_model * 2, d_model),
-            nn.Sigmoid()
-        )
-    
+        self.gate = nn.Sequential(nn.Linear(d_model * 2, d_model), nn.Sigmoid())
+
     def forward(self, x: torch.Tensor, residual: torch.Tensor) -> torch.Tensor:
         gate = self.gate(torch.cat([x, residual], dim=-1))
         return gate * x + (1 - gate) * residual
@@ -296,32 +293,46 @@ class GatedResidual(nn.Module):
 
 class MultiScaleTemporalConv(nn.Module):
     """Multi-scale temporal convolution for capturing patterns at different scales."""
-    
+
     def __init__(self, d_model: int, kernel_sizes: List[int] = [3, 5, 7]):
         super().__init__()
-        self.convs = nn.ModuleList([
-            nn.Conv1d(d_model, d_model // len(kernel_sizes), k, padding=k//2)
-            for k in kernel_sizes
-        ])
+        # Ensure hidden dim is divisible by 8 for CUDA memory alignment
+        hidden_per_kernel = (d_model // len(kernel_sizes)) // 8 * 8
+        if hidden_per_kernel == 0:
+            hidden_per_kernel = 8
+        self.hidden_total = hidden_per_kernel * len(kernel_sizes)
+
+        self.convs = nn.ModuleList(
+            [
+                nn.Conv1d(d_model, hidden_per_kernel, k, padding=k // 2)
+                for k in kernel_sizes
+            ]
+        )
+        self.proj = nn.Linear(self.hidden_total, d_model)
         self.norm = nn.LayerNorm(d_model)
-    
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
             x: (batch, time, channels, d_model)
         """
         B, T, C, D = x.shape
-        
+
         # Reshape for conv: (B*C, D, T)
-        x_conv = x.permute(0, 2, 3, 1).reshape(B * C, D, T)
-        
+        # Use contiguous() to ensure proper memory alignment for CUDA operations
+        x_conv = x.permute(0, 2, 3, 1).reshape(B * C, D, T).contiguous()
+
         # Apply multi-scale convolutions
         conv_outputs = [conv(x_conv) for conv in self.convs]
-        x_conv = torch.cat(conv_outputs, dim=1)  # (B*C, D, T)
-        
-        # Reshape back
-        x_conv = x_conv.reshape(B, C, D, T).permute(0, 3, 1, 2)  # (B, T, C, D)
-        
+        x_conv = torch.cat(conv_outputs, dim=1).contiguous()  # (B*C, hidden_total, T)
+
+        # Reshape and project back to d_model
+        x_conv = x_conv.transpose(1, 2).contiguous()  # (B*C, T, hidden_total)
+        x_conv = self.proj(x_conv)  # (B*C, T, D)
+        x_conv = (
+            x_conv.reshape(B, C, T, D).permute(0, 2, 1, 3).contiguous()
+        )  # (B, T, C, D)
+
         return self.norm(x_conv)
 
 
@@ -340,39 +351,39 @@ class EnhancedSpatialTemporalBlock(nn.Module):
         d_ff: int,
         n_channels: int,
         n_time: int,
-        dropout: float = 0.1
+        dropout: float = 0.1,
     ):
         super().__init__()
-        
+
         # Spatial attention (across channels)
         self.spatial_attn = nn.MultiheadAttention(
             d_model, n_heads, dropout=dropout, batch_first=True
         )
         self.spatial_norm = nn.LayerNorm(d_model)
         self.spatial_gate = GatedResidual(d_model)
-        
+
         # Temporal attention (across time)
         self.temporal_attn = nn.MultiheadAttention(
             d_model, n_heads, dropout=dropout, batch_first=True
         )
         self.temporal_norm = nn.LayerNorm(d_model)
         self.temporal_gate = GatedResidual(d_model)
-        
+
         # Multi-scale temporal convolution
         self.temporal_conv = MultiScaleTemporalConv(d_model)
         self.conv_gate = GatedResidual(d_model)
-        
+
         # Feed-forward network
         self.ffn = nn.Sequential(
             nn.Linear(d_model, d_ff),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_ff, d_model),
-            nn.Dropout(dropout)
+            nn.Dropout(dropout),
         )
         self.ffn_norm = nn.LayerNorm(d_model)
         self.ffn_gate = GatedResidual(d_model)
-        
+
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -381,27 +392,33 @@ class EnhancedSpatialTemporalBlock(nn.Module):
             x: (batch, time, channels, d_model)
         """
         B, T, C, D = x.shape
-        
+
         # Spatial attention: attend across channels for each time step
-        x_spatial = x.reshape(B * T, C, D)
+        # Use contiguous() to ensure proper memory alignment for CUDA operations
+        x_spatial = x.reshape(B * T, C, D).contiguous()
         spatial_out, _ = self.spatial_attn(x_spatial, x_spatial, x_spatial)
-        spatial_out = self.dropout(spatial_out).reshape(B, T, C, D)
+        spatial_out = self.dropout(spatial_out).reshape(B, T, C, D).contiguous()
         x = self.spatial_gate(self.spatial_norm(spatial_out), x)
-        
+
         # Temporal attention: attend across time for each channel
-        x_temporal = x.permute(0, 2, 1, 3).reshape(B * C, T, D)
+        x_temporal = x.permute(0, 2, 1, 3).reshape(B * C, T, D).contiguous()
         temporal_out, _ = self.temporal_attn(x_temporal, x_temporal, x_temporal)
-        temporal_out = self.dropout(temporal_out).reshape(B, C, T, D).permute(0, 2, 1, 3)
+        temporal_out = (
+            self.dropout(temporal_out)
+            .reshape(B, C, T, D)
+            .permute(0, 2, 1, 3)
+            .contiguous()
+        )
         x = self.temporal_gate(self.temporal_norm(temporal_out), x)
-        
+
         # Multi-scale temporal convolution
         conv_out = self.temporal_conv(x)
         x = self.conv_gate(conv_out, x)
-        
+
         # Feed-forward
         ffn_out = self.ffn(x)
         x = self.ffn_gate(self.ffn_norm(ffn_out), x)
-        
+
         return x
 
 
@@ -425,38 +442,35 @@ class AutoregressiveRefinementDecoder(nn.Module):
         n_heads: int,
         n_layers: int,
         n_refinement_steps: int = 2,
-        dropout: float = 0.1
+        dropout: float = 0.1,
     ):
         super().__init__()
         self.n_future = n_future
         self.n_channels = n_channels
         self.n_refinement_steps = n_refinement_steps
-        
+
         # Learned queries for future timesteps
         self.future_queries = nn.Parameter(
             torch.randn(1, n_future, n_channels, d_model) * 0.02
         )
-        
+
         # Decoder layers
-        self.layers = nn.ModuleList([
-            DecoderLayer(d_model, n_heads, dropout)
-            for _ in range(n_layers)
-        ])
-        
+        self.layers = nn.ModuleList(
+            [DecoderLayer(d_model, n_heads, dropout) for _ in range(n_layers)]
+        )
+
         # Refinement embedding (embeds previous prediction for refinement)
         self.refinement_embed = nn.Sequential(
-            nn.Linear(1, d_model // 2),
-            nn.GELU(),
-            nn.Linear(d_model // 2, d_model)
+            nn.Linear(1, d_model // 2), nn.GELU(), nn.Linear(d_model // 2, d_model)
         )
-        
+
         self.norm = nn.LayerNorm(d_model)
 
     def forward(
-        self, 
+        self,
         encoder_output: torch.Tensor,
         prev_prediction: Optional[torch.Tensor] = None,
-        refinement_step: int = 0
+        refinement_step: int = 0,
     ) -> torch.Tensor:
         """
         Args:
@@ -467,19 +481,19 @@ class AutoregressiveRefinementDecoder(nn.Module):
             (batch, n_future, channels, d_model)
         """
         B = encoder_output.shape[0]
-        
+
         # Start with learned queries
         x = self.future_queries.expand(B, -1, -1, -1)
-        
+
         # If refining, incorporate previous prediction
         if prev_prediction is not None and refinement_step > 0:
             prev_emb = self.refinement_embed(prev_prediction.unsqueeze(-1))
             x = x + prev_emb
-        
+
         # Apply decoder layers with cross-attention to encoder
         for layer in self.layers:
             x = layer(x, encoder_output)
-        
+
         return self.norm(x)
 
 
@@ -488,36 +502,32 @@ class DecoderLayer(nn.Module):
 
     def __init__(self, d_model: int, n_heads: int, dropout: float = 0.1):
         super().__init__()
-        
+
         # Self attention
         self.self_attn = nn.MultiheadAttention(
             d_model, n_heads, dropout=dropout, batch_first=True
         )
         self.norm1 = nn.LayerNorm(d_model)
-        
+
         # Cross attention
         self.cross_attn = nn.MultiheadAttention(
             d_model, n_heads, dropout=dropout, batch_first=True
         )
         self.norm2 = nn.LayerNorm(d_model)
-        
+
         # Feed-forward
         self.ffn = nn.Sequential(
             nn.Linear(d_model, d_model * 4),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_model * 4, d_model),
-            nn.Dropout(dropout)
+            nn.Dropout(dropout),
         )
         self.norm3 = nn.LayerNorm(d_model)
-        
+
         self.dropout = nn.Dropout(dropout)
 
-    def forward(
-        self, 
-        x: torch.Tensor, 
-        encoder_output: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, encoder_output: torch.Tensor) -> torch.Tensor:
         """
         Args:
             x: (batch, n_future, channels, d_model)
@@ -525,23 +535,24 @@ class DecoderLayer(nn.Module):
         """
         B, T_fut, C, D = x.shape
         _, T_enc, _, _ = encoder_output.shape
-        
+
         # Flatten for attention
-        x_flat = x.reshape(B, T_fut * C, D)
-        enc_flat = encoder_output.reshape(B, T_enc * C, D)
-        
+        # Use contiguous() to ensure proper memory alignment for CUDA operations
+        x_flat = x.reshape(B, T_fut * C, D).contiguous()
+        enc_flat = encoder_output.reshape(B, T_enc * C, D).contiguous()
+
         # Self attention
         attn_out, _ = self.self_attn(x_flat, x_flat, x_flat)
         x_flat = self.norm1(x_flat + self.dropout(attn_out))
-        
+
         # Cross attention
         attn_out, _ = self.cross_attn(x_flat, enc_flat, enc_flat)
         x_flat = self.norm2(x_flat + self.dropout(attn_out))
-        
+
         # Feed-forward
         x_flat = self.norm3(x_flat + self.ffn(x_flat))
-        
-        return x_flat.reshape(B, T_fut, C, D)
+
+        return x_flat.reshape(B, T_fut, C, D).contiguous()
 
 
 # =============================================================================
@@ -572,7 +583,7 @@ class EnhancedSpatialTemporalForecaster(nn.Module):
         n_refinement_steps: int = 2,
         d_ff: int = 1024,
         dropout: float = 0.1,
-        use_revin: bool = True
+        use_revin: bool = True,
     ):
         super().__init__()
 
@@ -589,22 +600,26 @@ class EnhancedSpatialTemporalForecaster(nn.Module):
             self.revin = EnhancedRevIN(n_channels, affine=True, subtract_last=True)
 
         # Enhanced feature embedding with frequency attention
-        self.feature_embed = EnhancedFeatureEmbedding(n_features, d_model, n_heads // 2, dropout)
+        self.feature_embed = EnhancedFeatureEmbedding(
+            n_features, d_model, n_heads // 2, dropout
+        )
 
         # Channel-aware positional encoding
         self.pos_encoding = ChannelAwarePositionalEncoding(
             max_time=n_input_steps + n_output_steps,
             max_channels=n_channels,
-            d_model=d_model
+            d_model=d_model,
         )
 
         # Encoder with enhanced blocks
-        self.encoder_layers = nn.ModuleList([
-            EnhancedSpatialTemporalBlock(
-                d_model, n_heads, d_ff, n_channels, n_input_steps, dropout
-            )
-            for _ in range(n_encoder_layers)
-        ])
+        self.encoder_layers = nn.ModuleList(
+            [
+                EnhancedSpatialTemporalBlock(
+                    d_model, n_heads, d_ff, n_channels, n_input_steps, dropout
+                )
+                for _ in range(n_encoder_layers)
+            ]
+        )
 
         # Autoregressive refinement decoder
         self.decoder = AutoregressiveRefinementDecoder(
@@ -614,27 +629,23 @@ class EnhancedSpatialTemporalForecaster(nn.Module):
             n_heads=n_heads,
             n_layers=n_decoder_layers,
             n_refinement_steps=n_refinement_steps,
-            dropout=dropout
+            dropout=dropout,
         )
 
         # Output projections
         self.output_proj = nn.Sequential(
-            nn.Linear(d_model, d_model // 2),
-            nn.GELU(),
-            nn.Linear(d_model // 2, 1)
+            nn.Linear(d_model, d_model // 2), nn.GELU(), nn.Linear(d_model // 2, 1)
         )
-        
+
         # Auxiliary output for all features (multi-task learning)
         self.aux_output_proj = nn.Sequential(
             nn.Linear(d_model, d_model // 2),
             nn.GELU(),
-            nn.Linear(d_model // 2, n_features)
+            nn.Linear(d_model // 2, n_features),
         )
 
     def forward(
-        self, 
-        x: torch.Tensor,
-        return_intermediate: bool = False
+        self, x: torch.Tensor, return_intermediate: bool = False
     ) -> Tuple[torch.Tensor, ...]:
         """
         Args:
@@ -646,61 +657,67 @@ class EnhancedSpatialTemporalForecaster(nn.Module):
             intermediate: list of intermediate predictions (if return_intermediate)
         """
         B, T, C, F = x.shape
-        
+
         # Extract input steps
-        x_input = x[:, :self.n_input_steps, :, :]  # (B, n_input, C, F)
-        
+        # Use contiguous() to ensure proper memory alignment for CUDA operations
+        x_input = x[:, : self.n_input_steps, :, :].contiguous()  # (B, n_input, C, F)
+
         # Apply RevIN to target feature
-        target = x_input[..., 0]  # (B, n_input, C)
+        target = x_input[..., 0].contiguous()  # (B, n_input, C)
         if self.use_revin:
-            target_norm = self.revin(target, mode='norm')
+            target_norm = self.revin(target, mode="norm")
             # Reconstruct input with normalized target
-            x_input = torch.cat([
-                target_norm.unsqueeze(-1),
-                x_input[..., 1:]
-            ], dim=-1)
-        
+            x_input = torch.cat(
+                [target_norm.unsqueeze(-1), x_input[..., 1:].contiguous()], dim=-1
+            ).contiguous()
+
         # Feature embedding
         x_emb = self.feature_embed(x_input)  # (B, n_input, C, d_model)
-        
+
         # Add positional encoding
         x_emb = self.pos_encoding(x_emb)
-        
+
         # Encode
         encoder_out = x_emb
         for layer in self.encoder_layers:
             encoder_out = layer(encoder_out)
-        
+
         # Decode with refinement
         intermediate_preds = []
         prev_pred = None
-        
+
         for step in range(self.n_refinement_steps):
             decoder_out = self.decoder(encoder_out, prev_pred, step)
-            
+
             # Get main prediction
-            main_out = self.output_proj(decoder_out).squeeze(-1)  # (B, n_output, C)
-            
+            main_out = (
+                self.output_proj(decoder_out).squeeze(-1).contiguous()
+            )  # (B, n_output, C)
+
             # Denormalize if using RevIN
             if self.use_revin:
-                main_out = self.revin(main_out, mode='denorm')
-            
+                main_out = self.revin(main_out, mode="denorm")
+
             if return_intermediate:
                 intermediate_preds.append(main_out)
-            
-            prev_pred = main_out.detach() if step < self.n_refinement_steps - 1 else main_out
-        
+
+            prev_pred = (
+                main_out.detach() if step < self.n_refinement_steps - 1 else main_out
+            )
+
         # Get auxiliary prediction (for multi-task learning)
-        aux_out = self.aux_output_proj(decoder_out)  # (B, n_output, C, F)
-        
+        aux_out = self.aux_output_proj(decoder_out).contiguous()  # (B, n_output, C, F)
+
         # Construct full prediction
         # Input steps: use ground truth target
-        input_target = x[:, :self.n_input_steps, :, 0]  # (B, n_input, C)
-        full_pred = torch.cat([input_target, prev_pred], dim=1)  # (B, T, C)
-        
+        input_target = x[:, : self.n_input_steps, :, 0].contiguous()  # (B, n_input, C)
+        full_pred = torch.cat(
+            [input_target, prev_pred], dim=1
+        ).contiguous()  # (B, T, C)
+
         if return_intermediate:
             return full_pred, aux_out, intermediate_preds
-        
+
         return full_pred, aux_out
 
     def predict(self, x: torch.Tensor) -> torch.Tensor:
@@ -718,32 +735,32 @@ class EnhancedSpatialTemporalForecaster(nn.Module):
 
 class TTAWrapper(nn.Module):
     """Test-time augmentation wrapper."""
-    
+
     def __init__(self, model: nn.Module, n_augments: int = 5):
         super().__init__()
         self.model = model
         self.n_augments = n_augments
-    
+
     def augment(self, x: torch.Tensor) -> torch.Tensor:
         """Apply random augmentation."""
         # Small noise augmentation
         noise_scale = 0.01
         return x + torch.randn_like(x) * noise_scale * x.std()
-    
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward with TTA."""
         predictions = []
-        
+
         # Original prediction
         pred, _ = self.model(x)
         predictions.append(pred)
-        
+
         # Augmented predictions
         for _ in range(self.n_augments - 1):
             x_aug = self.augment(x)
             pred_aug, _ = self.model(x_aug)
             predictions.append(pred_aug)
-        
+
         # Aggregate with trimmed mean (remove outliers)
         stacked = torch.stack(predictions, dim=0)
         if self.n_augments >= 5:
@@ -781,10 +798,10 @@ class NeuralForecaster(nn.Module):
         dropout: float = 0.1,
         use_revin: bool = True,
         use_tta: bool = False,
-        n_tta_augments: int = 5
+        n_tta_augments: int = 5,
     ):
         super().__init__()
-        
+
         self.model = EnhancedSpatialTemporalForecaster(
             n_channels=n_channels,
             n_features=n_features,
@@ -797,28 +814,25 @@ class NeuralForecaster(nn.Module):
             n_refinement_steps=n_refinement_steps,
             d_ff=d_ff,
             dropout=dropout,
-            use_revin=use_revin
+            use_revin=use_revin,
         )
-        
+
         self.use_tta = use_tta
         if use_tta:
             self.tta_wrapper = TTAWrapper(self.model, n_tta_augments)
-        
+
         self.n_channels = n_channels
         self.n_input_steps = n_input_steps
         self.n_output_steps = n_output_steps
 
     def forward(
-        self, 
-        x: torch.Tensor,
-        return_intermediate: bool = False
+        self, x: torch.Tensor, return_intermediate: bool = False
     ) -> Tuple[torch.Tensor, ...]:
         """Forward pass for training."""
         return self.model(x, return_intermediate)
-    
+
     def forward_with_intermediate(
-        self,
-        x: torch.Tensor
+        self, x: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, List[torch.Tensor]]:
         """Forward pass that returns intermediate predictions."""
         return self.model(x, return_intermediate=True)
@@ -853,7 +867,7 @@ class EnhancedForecastingLoss(nn.Module):
         huber_weight: float = 0.3,
         temporal_weight: float = 0.1,
         intermediate_weight: float = 0.2,
-        aux_weight: float = 0.1
+        aux_weight: float = 0.1,
     ):
         super().__init__()
         self.mse_weight = mse_weight
@@ -861,7 +875,7 @@ class EnhancedForecastingLoss(nn.Module):
         self.temporal_weight = temporal_weight
         self.intermediate_weight = intermediate_weight
         self.aux_weight = aux_weight
-        
+
         self.mse = nn.MSELoss()
         self.huber = nn.SmoothL1Loss()
 
@@ -872,7 +886,7 @@ class EnhancedForecastingLoss(nn.Module):
         aux_pred: Optional[torch.Tensor] = None,
         aux_target: Optional[torch.Tensor] = None,
         intermediate_preds: Optional[List[torch.Tensor]] = None,
-        n_input_steps: int = 10
+        n_input_steps: int = 10,
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
         """
         Args:
@@ -886,42 +900,44 @@ class EnhancedForecastingLoss(nn.Module):
         # Only compute loss on future steps
         pred_future = pred[:, n_input_steps:, :]
         target_future = target[:, n_input_steps:, :]
-        
+
         # Main losses
         mse_loss = self.mse(pred_future, target_future)
         huber_loss = self.huber(pred_future, target_future)
         main_loss = self.mse_weight * mse_loss + self.huber_weight * huber_loss
-        
+
         # Temporal consistency loss (smoothness)
         pred_diff = pred_future[:, 1:, :] - pred_future[:, :-1, :]
         target_diff = target_future[:, 1:, :] - target_future[:, :-1, :]
         temporal_loss = self.mse(pred_diff, target_diff)
-        
+
         total_loss = main_loss + self.temporal_weight * temporal_loss
-        
+
         metrics = {
-            'mse': mse_loss.item(),
-            'huber': huber_loss.item(),
-            'temporal': temporal_loss.item()
+            "mse": mse_loss.item(),
+            "huber": huber_loss.item(),
+            "temporal": temporal_loss.item(),
         }
-        
+
         # Intermediate prediction loss
         if intermediate_preds is not None and len(intermediate_preds) > 1:
             inter_loss = 0
-            for inter_pred in intermediate_preds[:-1]:  # Skip final (already in main loss)
+            for inter_pred in intermediate_preds[
+                :-1
+            ]:  # Skip final (already in main loss)
                 inter_loss += self.mse(inter_pred, target_future)
-            inter_loss /= (len(intermediate_preds) - 1)
+            inter_loss /= len(intermediate_preds) - 1
             total_loss += self.intermediate_weight * inter_loss
-            metrics['intermediate'] = inter_loss.item()
-        
+            metrics["intermediate"] = inter_loss.item()
+
         # Auxiliary loss
         if aux_pred is not None and aux_target is not None:
             aux_loss = self.mse(aux_pred, aux_target)
             total_loss += self.aux_weight * aux_loss
-            metrics['auxiliary'] = aux_loss.item()
-        
-        metrics['total'] = total_loss.item()
-        
+            metrics["auxiliary"] = aux_loss.item()
+
+        metrics["total"] = total_loss.item()
+
         return total_loss, metrics
 
 
@@ -934,44 +950,40 @@ def create_model(
     n_channels: int,
     device: torch.device,
     memory_efficient: bool = False,
-    use_tta: bool = False
+    use_tta: bool = False,
 ) -> NeuralForecaster:
     """Create model with appropriate settings."""
-    
+
     if memory_efficient:
         config = {
-            'd_model': 128,
-            'n_heads': 4,
-            'n_encoder_layers': 3,
-            'n_decoder_layers': 2,
-            'n_refinement_steps': 1,
-            'd_ff': 512,
-            'dropout': 0.1
+            "d_model": 128,
+            "n_heads": 4,
+            "n_encoder_layers": 3,
+            "n_decoder_layers": 2,
+            "n_refinement_steps": 1,
+            "d_ff": 512,
+            "dropout": 0.1,
         }
     else:
         config = {
-            'd_model': 256,
-            'n_heads': 8,
-            'n_encoder_layers': 4,
-            'n_decoder_layers': 2,
-            'n_refinement_steps': 2,
-            'd_ff': 1024,
-            'dropout': 0.1
+            "d_model": 256,
+            "n_heads": 8,
+            "n_encoder_layers": 4,
+            "n_decoder_layers": 2,
+            "n_refinement_steps": 2,
+            "d_ff": 1024,
+            "dropout": 0.1,
         }
-    
-    model = NeuralForecaster(
-        n_channels=n_channels,
-        use_tta=use_tta,
-        **config
-    )
-    
+
+    model = NeuralForecaster(n_channels=n_channels, use_tta=use_tta, **config)
+
     return model.to(device)
 
 
 def validate(
     model: NeuralForecaster,
     val_loader: torch.utils.data.DataLoader,
-    device: torch.device
+    device: torch.device,
 ) -> float:
     """Compute validation MSE."""
     model.eval()
@@ -1036,19 +1048,19 @@ if __name__ == "__main__":
     print(f"Output shape: {out.shape}")
     print(f"Aux shape: {aux.shape}")
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-    
+
     # Test with intermediate
     out, aux, inter = model.forward_with_intermediate(x)
     print(f"Intermediate predictions: {len(inter)}")
-    
+
     # Test Monkey B (87 channels)
     print("\nTesting Monkey B (87 channels)...")
     model_b = create_model(87, device, memory_efficient=True)
     x_b = torch.randn(2, 20, 87, 9).to(device)
-    
+
     out_b, aux_b = model_b(x_b)
     print(f"Input shape: {x_b.shape}")
     print(f"Output shape: {out_b.shape}")
     print(f"Model parameters: {sum(p.numel() for p in model_b.parameters()):,}")
-    
+
     print("\nAll tests passed!")

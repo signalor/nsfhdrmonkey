@@ -113,19 +113,29 @@ class ChannelAwarePositionalEncoding(nn.Module):
         self.d_model = d_model
         self.use_sinusoidal = use_sinusoidal
 
+        # Ensure dimensions are divisible by 8 for CUDA memory alignment
+        d_half = (d_model // 2) // 8 * 8
+        if d_half == 0:
+            d_half = 8
+        d_quarter = (d_model // 4) // 8 * 8
+        if d_quarter == 0:
+            d_quarter = 8
+
+        self.d_half = d_half
+        self.d_quarter = d_quarter
+
         # Learnable temporal embeddings
-        self.time_embed = nn.Parameter(torch.randn(1, max_time, 1, d_model // 2) * 0.02)
+        self.time_embed = nn.Parameter(torch.randn(1, max_time, 1, d_half) * 0.02)
 
         # Sinusoidal temporal encoding
         if use_sinusoidal:
-            pe = torch.zeros(max_time, d_model // 2)
+            pe = torch.zeros(max_time, d_half)
             position = torch.arange(0, max_time, dtype=torch.float).unsqueeze(1)
             div_term = torch.exp(
-                torch.arange(0, d_model // 2, 2).float()
-                * (-math.log(10000.0) / (d_model // 2))
+                torch.arange(0, d_half, 2).float() * (-math.log(10000.0) / d_half)
             )
             pe[:, 0::2] = torch.sin(position * div_term)
-            pe[:, 1::2] = torch.cos(position * div_term)
+            pe[:, 1::2] = torch.cos(position * div_term[: pe[:, 1::2].shape[1]])
             self.register_buffer("sinusoidal_pe", pe.unsqueeze(0).unsqueeze(2))
 
         # Learnable channel embeddings
@@ -137,15 +147,15 @@ class ChannelAwarePositionalEncoding(nn.Module):
         self.channel_relation = nn.Parameter(
             torch.eye(max_channels).unsqueeze(0).unsqueeze(0) * 0.1
         )
-        self.relation_proj = nn.Linear(max_channels, d_model // 4)
+        self.relation_proj = nn.Linear(max_channels, d_quarter)
 
         # Final projection to combine all encodings
         # x + channel_encoding: d_model
-        # time_encoding: d_model // 2 (learnable) + d_model // 2 (sinusoidal if enabled)
-        # relation_encoding: d_model // 4
-        total_dim = d_model + d_model // 2 + d_model // 4  # base: 256 + 128 + 64 = 448
+        # time_encoding: d_half (learnable) + d_half (sinusoidal if enabled)
+        # relation_encoding: d_quarter
+        total_dim = d_model + d_half + d_quarter
         if use_sinusoidal:
-            total_dim += d_model // 2  # add sinusoidal: 448 + 128 = 576
+            total_dim += d_half
         self.output_proj = nn.Linear(total_dim, d_model)
         self.norm = nn.LayerNorm(d_model)
 
@@ -218,33 +228,41 @@ class FrequencyBandAttention(nn.Module):
     ):
         super().__init__()
         self.n_features = n_features
-        self.d_model = d_model
+
+        # Ensure d_model is divisible by 8 and by n_heads for CUDA memory alignment
+        d_model_aligned = (d_model // 8) * 8
+        if d_model_aligned == 0:
+            d_model_aligned = 8
+        # Also ensure divisible by n_heads
+        while d_model_aligned % n_heads != 0:
+            d_model_aligned += 8
+        self.d_model = d_model_aligned
 
         # Embed each frequency band separately
         self.band_embeddings = nn.ModuleList(
-            [nn.Linear(1, d_model) for _ in range(n_features)]
+            [nn.Linear(1, d_model_aligned) for _ in range(n_features)]
         )
 
         # Cross-frequency attention
         self.freq_attention = nn.MultiheadAttention(
-            d_model, n_heads, dropout=dropout, batch_first=True
+            d_model_aligned, n_heads, dropout=dropout, batch_first=True
         )
 
         # Learnable frequency position encoding
-        self.freq_pos = nn.Parameter(torch.randn(1, n_features, d_model) * 0.02)
+        self.freq_pos = nn.Parameter(torch.randn(1, n_features, d_model_aligned) * 0.02)
 
         # Output projection
         self.output_proj = nn.Sequential(
-            nn.Linear(d_model * n_features, d_model * 2),
+            nn.Linear(d_model_aligned * n_features, d_model_aligned * 2),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(d_model * 2, d_model),
+            nn.Linear(d_model_aligned * 2, d_model),  # Output original d_model
             nn.LayerNorm(d_model),
         )
 
         # Gating mechanism for feature fusion
         self.gate = nn.Sequential(
-            nn.Linear(d_model * n_features, d_model), nn.Sigmoid()
+            nn.Linear(d_model_aligned * n_features, d_model), nn.Sigmoid()
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -325,7 +343,11 @@ class MultiScaleTemporalConv(nn.Module):
         super().__init__()
 
         n_scales = len(kernel_sizes) * len(dilations)
-        hidden_per_scale = d_model // n_scales
+        # Ensure hidden_per_scale is divisible by 8 for CUDA memory alignment
+        hidden_per_scale = (d_model // n_scales) // 8 * 8
+        if hidden_per_scale == 0:
+            hidden_per_scale = 8
+        self.hidden_total = hidden_per_scale * n_scales
 
         self.convs = nn.ModuleList()
         for k in kernel_sizes:
@@ -348,7 +370,7 @@ class MultiScaleTemporalConv(nn.Module):
                     )
                 )
 
-        self.proj = nn.Linear(hidden_per_scale * n_scales, d_model)
+        self.proj = nn.Linear(self.hidden_total, d_model)
         self.norm = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
 
@@ -673,18 +695,27 @@ class EnhancedFeatureEmbedding(nn.Module):
         super().__init__()
         self.n_features = n_features
 
+        # Ensure dimensions are divisible by 8 for CUDA memory alignment
+        d_half = (d_model // 2) // 8 * 8
+        if d_half == 0:
+            d_half = 8
+        d_quarter = (d_model // 4) // 8 * 8
+        if d_quarter == 0:
+            d_quarter = 8
+
         # Individual feature projections
-        self.target_proj = nn.Linear(1, d_model // 2)
-        self.freq_proj = nn.Linear(n_features - 1, d_model // 2)
+        self.target_proj = nn.Linear(1, d_half)
+        self.freq_proj = nn.Linear(n_features - 1, d_half)
 
         # Frequency band attention
         self.freq_attention = FrequencyBandAttention(
-            n_features, d_model // 4, n_heads, dropout
+            n_features, d_quarter, max(1, n_heads // 2), dropout
         )
 
-        # Fusion network
+        # Fusion network (input is d_half * 2 + d_quarter)
+        fusion_input_dim = d_half * 2 + d_quarter
         self.fusion = nn.Sequential(
-            nn.Linear(d_model + d_model // 4, d_model),
+            nn.Linear(fusion_input_dim, d_model),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_model, d_model),
@@ -692,9 +723,13 @@ class EnhancedFeatureEmbedding(nn.Module):
         )
 
         # Gating for adaptive fusion
-        self.gate = nn.Sequential(
-            nn.Linear(d_model + d_model // 4, d_model), nn.Sigmoid()
-        )
+        self.gate = nn.Sequential(nn.Linear(fusion_input_dim, d_model), nn.Sigmoid())
+
+        # Project simple_embed to d_model for residual connection
+        self.simple_proj = nn.Linear(d_half * 2, d_model)
+
+        # Store for forward pass
+        self.d_half = d_half
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -720,7 +755,9 @@ class EnhancedFeatureEmbedding(nn.Module):
 
         # Gated fusion
         gate = self.gate(combined)
-        output = self.fusion(combined) * gate + simple_embed * (1 - gate)
+        fused = self.fusion(combined)
+        simple_proj = self.simple_proj(simple_embed)
+        output = fused * gate + simple_proj * (1 - gate)
 
         return output.contiguous()
 
