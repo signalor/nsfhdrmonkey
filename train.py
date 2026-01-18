@@ -520,9 +520,18 @@ def main():
     total_mem, avail_mem = get_memory_info()
     print(f"System RAM: {total_mem:.1f} GB total, {avail_mem:.1f} GB available")
 
-    # Auto-configure based on available memory
+    # Device and GPU info
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    n_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+
+    # Auto-configure based on available memory and GPU count
     if args.batch_size is None:
-        if avail_mem > 16:
+        if n_gpus > 1 and args.multi_gpu:
+            # For multi-GPU, ensure batch size per GPU is > 1 for BatchNorm.
+            # H100s have plenty of memory, so we can use a larger batch size.
+            batch_size = n_gpus * 4  # e.g., 32 for 8 GPUs, giving 4 per GPU.
+            accumulation_steps = max(1, 32 // batch_size)
+        elif avail_mem > 16:
             batch_size = 8
             accumulation_steps = 4
         elif avail_mem > 8:
@@ -545,20 +554,16 @@ def main():
     memory_efficient = True
     print(f"Memory efficient: {memory_efficient}, AMP: {use_amp}")
 
-    # Device and GPU info
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     # Log GPU information
     if torch.cuda.is_available():
-        n_gpus = torch.cuda.device_count()
         print(f"Number of GPUs available: {n_gpus}")
         for i in range(n_gpus):
             gpu_name = torch.cuda.get_device_name(i)
             gpu_mem = torch.cuda.get_device_properties(i).total_memory / (1024**3)
             print(f"  GPU {i}: {gpu_name} ({gpu_mem:.1f} GB)")
     else:
-        n_gpus = 0
         print("No CUDA GPUs available, using CPU")
 
     # Train models
