@@ -13,3 +13,4 @@ package-lock.json
 bun.lock
 *.pth
 *.zip
+HDR_Challenge_y2/*

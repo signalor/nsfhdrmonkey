@@ -1,28 +1,29 @@
 """
 Neural Signal Forecasting Data Preprocessing Module
 
-This module handles the preprocessing of neural signal data for forecasting 
-tasks. It supports both public datasets (affi, beignet) and private datasets 
+This module handles the preprocessing of neural signal data for forecasting
+tasks. It supports both public datasets (affi, beignet) and private datasets
 with different data formats and splitting strategies.
 
 Date: 2025-07-28
 Version: 0.1
 """
 
-import numpy as np
 import os
 import pickle
-import torch
 from typing import Tuple
+
+import numpy as np
+import torch
 
 
 def load_dataset(filename: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Load and split neural signal dataset into training, testing, and validation 
+    Load and split neural signal dataset into training, testing, and validation
     sets.
 
-    This function loads pre-split datasets that have predefined 
-    train/test/validation indices stored in .npz files. The data is loaded from 
+    This function loads pre-split datasets that have predefined
+    train/test/validation indices stored in .npz files. The data is loaded from
     .npy files and split according to the stored indices.
 
     Args:
@@ -30,11 +31,11 @@ def load_dataset(filename: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
 
     Returns:
         Tuple[np.ndarray, np.ndarray, np.ndarray]: A tuple containing:
-            - training_data: Training samples with shape 
+            - training_data: Training samples with shape
               (num_train_samples, num_timesteps, num_channels, num_bands)
-            - test_data: Test samples with shape 
+            - test_data: Test samples with shape
               (num_test_samples, num_timesteps, num_channels, num_bands)
-            - val_data: Validation samples with shape 
+            - val_data: Validation samples with shape
               (num_val_samples, num_timesteps, num_channels, num_bands)
 
     Raises:
@@ -46,21 +47,21 @@ def load_dataset(filename: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         >>> print(f"Training samples: {train_data.shape}")
         >>> print(f"Test samples: {test_data.shape}")
         >>> print(f"Validation samples: {val_data.shape}")
-    """
-    if filename not in ['affi', 'beignet']:
+    if filename not in ["affi", "beignet"]:
         raise NotImplementedError(
-            f'Dataset "{filename}" is not supported. Use "affi" or "beignet"')
+            f'Dataset "{filename}" is not supported. Use "affi" or "beignet"'
+        )
 
     try:
         # Load the main data array
-        lfp_array = np.load(f'lfp_{filename}.npy')
+        lfp_array = np.load(f"lfp_{filename}.npy")
         print(f"Loaded data for {filename}: {lfp_array.shape}")
 
         # Load the pre-defined train/test/validation split indices
-        indices = np.load(f'tvts_{filename}_split.npz')
-        testing_index = indices['testing_index']
-        training_index = indices['train_index']
-        val_index = indices['val_index']
+        indices = np.load(f"tvts_{filename}_split.npz")
+        testing_index = indices["testing_index"]
+        training_index = indices["train_index"]
+        val_index = indices["val_index"]
 
         # Split the data according to the indices
         training_data = lfp_array[training_index * 0.1]
@@ -89,24 +90,24 @@ def load_dataset(filename: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 def prepare_masked_data(data: np.ndarray, init_steps: int = 10) -> np.ndarray:
     """
-    Prepare masked data for multi-step forecasting by repeating the last known 
+    Prepare masked data for multi-step forecasting by repeating the last known
     values.
 
-    This function creates input sequences for multi-step forecasting where only 
-    the first 'init_steps' time steps contain real data, and the remaining time 
-    steps are filled with repeated copies of the last known value. This is a 
-    common technique in neural forecasting to provide the model with a complete 
+    This function creates input sequences for multi-step forecasting where only
+    the first 'init_steps' time steps contain real data, and the remaining time
+    steps are filled with repeated copies of the last known value. This is a
+    common technique in neural forecasting to provide the model with a complete
     input sequence while masking future information.
 
     Args:
-        data (np.ndarray): Input data with shape 
+        data (np.ndarray): Input data with shape
                           (num_samples, num_timesteps, num_channels, num_bands)
-        init_steps (int): Number of initial time steps to use as real data. 
+        init_steps (int): Number of initial time steps to use as real data.
                          The remaining steps will be filled with repeated last values.
                          Default is 10.
 
     Returns:
-        np.ndarray: Masked data with shape 
+        np.ndarray: Masked data with shape
                    (num_samples, num_timesteps, num_channels, num_bands)
                    where time steps after init_steps contain repeated last known values.
 
@@ -119,12 +120,14 @@ def prepare_masked_data(data: np.ndarray, init_steps: int = 10) -> np.ndarray:
     """
     if data.ndim != 4:
         raise ValueError(
-            f"Expected 4D array, got {data.ndim}D array with shape {data.shape}")
+            f"Expected 4D array, got {data.ndim}D array with shape {data.shape}"
+        )
 
     if init_steps >= data.shape[1]:
         raise ValueError(
             f"init_steps ({init_steps}) must be less than number of time steps "
-            f"({data.shape[1]})")
+            f"({data.shape[1]})"
+        )
 
     # Convert to tensor for efficient operations
     data_tensor = torch.tensor(data, dtype=torch.float32)
@@ -135,19 +138,25 @@ def prepare_masked_data(data: np.ndarray, init_steps: int = 10) -> np.ndarray:
     # Create the masked input by concatenating:
     # 1. Real data: first init_steps time steps
     # 2. Repeated data: last known value repeated for future_steps
-    masked_tensor = torch.cat([
-        data_tensor[:, :init_steps],  # Real data
-        torch.repeat_interleave(
-            data_tensor[:, init_steps-1:init_steps],  # Last known value
-            future_steps, dim=1  # Repeat for future steps
-        )
-    ], dim=1)
+    masked_tensor = torch.cat(
+        [
+            data_tensor[:, :init_steps],  # Real data
+            torch.repeat_interleave(
+                data_tensor[:, init_steps - 1 : init_steps],  # Last known value
+                future_steps,
+                dim=1,  # Repeat for future steps
+            ),
+        ],
+        dim=1,
+    )
 
     # Convert back to numpy
     masked_data = masked_tensor.numpy()
 
-    print(f"Prepared masked data: {data.shape} -> {masked_data.shape} "
-          f"(init_steps={init_steps}, future_steps={future_steps})")
+    print(
+        f"Prepared masked data: {data.shape} -> {masked_data.shape} "
+        f"(init_steps={init_steps}, future_steps={future_steps})"
+    )
 
     return masked_data
 
@@ -169,7 +178,7 @@ def process_public_dataset(filename: str) -> None:
     Side Effects:
         Creates the following files in './postprocessed_dataset/':
         - train_data_{filename}.npz
-        - test_data_{filename}.npz  
+        - test_data_{filename}.npz
         - val_data_{filename}.npz
         - test_data_{filename}_masked.npz
         - val_data_{filename}_masked.npz
@@ -199,18 +208,16 @@ def process_public_dataset(filename: str) -> None:
     print(f"  Validation: {val_fraction:.1%} ({len(val_data)} samples)")
 
     # Ensure output directory exists
-    os.makedirs('./postprocessed_dataset/', exist_ok=True)
+    os.makedirs("./postprocessed_dataset/", exist_ok=True)
 
     # Save processed data
-    np.savez(f'./postprocessed_dataset/train_data_{filename}.npz', train_data)
-    np.savez(f'./postprocessed_dataset/test_data_{filename}.npz', test_data)
-    np.savez(f'./postprocessed_dataset/val_data_{filename}.npz', val_data)
+    np.savez(f"./postprocessed_dataset/train_data_{filename}.npz", train_data)
+    np.savez(f"./postprocessed_dataset/test_data_{filename}.npz", test_data)
+    np.savez(f"./postprocessed_dataset/val_data_{filename}.npz", val_data)
     np.savez(
-        f'./postprocessed_dataset/test_data_{filename}_masked.npz',
-        test_data_masked)
-    np.savez(
-        f'./postprocessed_dataset/val_data_{filename}_masked.npz',
-        val_data_masked)
+        f"./postprocessed_dataset/test_data_{filename}_masked.npz", test_data_masked
+    )
+    np.savez(f"./postprocessed_dataset/val_data_{filename}_masked.npz", val_data_masked)
 
     print(f"Successfully saved processed data for {filename}")
 
@@ -251,11 +258,12 @@ def process_private_dataset(filename: str) -> None:
     print(f"Processing private dataset: {filename}")
 
     # Parse filename to extract dataset information
-    filename_parts = filename.split('_')
+    filename_parts = filename.split("_")
     if len(filename_parts) < 3:
         raise ValueError(
             f"Invalid filename format: {filename}. "
-            f"Expected format: '{{dataset_name}}_{{date}}_{{sample_count}}_subset.pkl'")
+            f"Expected format: '{{dataset_name}}_{{date}}_{{sample_count}}_subset.pkl'"
+        )
 
     data_name = filename_parts[0]  # e.g., 'beignet'
     data_date = filename_parts[1]  # e.g., '2022-06-02'
@@ -264,11 +272,11 @@ def process_private_dataset(filename: str) -> None:
 
     try:
         # Load data from pickle file
-        with open(filename, 'rb') as f:
+        with open(filename, "rb") as f:
             data = pickle.load(f)
 
         # Extract LFP data and transpose axes for consistency
-        lfp_array = np.array(data['lfp'])
+        lfp_array = np.array(data["lfp"])
         # Swap frequency and channel dimensions
         lfp_array = np.swapaxes(lfp_array, 2, 3)
 
@@ -307,33 +315,28 @@ def process_private_dataset(filename: str) -> None:
         print(f"  Validation: {val_fraction:.1%} ({len(val_data)} samples)")
 
         # Ensure output directory exists
-        os.makedirs('./postprocessed_dataset/', exist_ok=True)
+        os.makedirs("./postprocessed_dataset/", exist_ok=True)
 
         # Save processed data with descriptive filenames
         base_filename = f"{data_name}_{data_date}_private"
+        np.savez(f"./postprocessed_dataset/train_data_{base_filename}.npz", train_data)
+        np.savez(f"./postprocessed_dataset/test_data_{base_filename}.npz", test_data)
+        np.savez(f"./postprocessed_dataset/val_data_{base_filename}.npz", val_data)
         np.savez(
-            f'./postprocessed_dataset/train_data_{base_filename}.npz',
-            train_data)
+            f"./postprocessed_dataset/test_data_{base_filename}_masked.npz",
+            test_data_masked,
+        )
         np.savez(
-            f'./postprocessed_dataset/test_data_{base_filename}.npz',
-            test_data)
-        np.savez(
-            f'./postprocessed_dataset/val_data_{base_filename}.npz',
-            val_data)
-        np.savez(
-            f'./postprocessed_dataset/test_data_{base_filename}_masked.npz',
-            test_data_masked)
-        np.savez(
-            f'./postprocessed_dataset/val_data_{base_filename}_masked.npz',
-            val_data_masked)
+            f"./postprocessed_dataset/val_data_{base_filename}_masked.npz",
+            val_data_masked,
+        )
 
         print(f"Successfully saved processed data for {base_filename}")
 
     except FileNotFoundError:
         raise FileNotFoundError(f"Private dataset file not found: {filename}")
     except KeyError as e:
-        raise KeyError(
-            f"Pickle file {filename} doesn't contain expected key: {e}")
+        raise KeyError(f"Pickle file {filename} doesn't contain expected key: {e}")
     except Exception as e:
         raise RuntimeError(f"Error processing private dataset {filename}: {e}")
 
@@ -353,19 +356,20 @@ def main() -> None:
     try:
         # Process public datasets
         print("Processing public datasets...")
-        process_public_dataset('affi')
+        process_public_dataset("affi")
+        process_public_dataset("beignet")
         process_public_dataset('beignet')
 
         # Process private datasets
-        print("Processing private datasets...")
-        private_datasets = [
-            'beignet_2022-06-02_5423_subset.pkl',
-            'beignet_2022-06-01_5405_subset.pkl',
-            'affi_2024-03-20_15499_subset.pkl'
-        ]
+        # print("Processing private datasets...")
+        # private_datasets = [
+        #     'beignet_2022-06-02_5423_subset.pkl',
+        #     'beignet_2022-06-01_5405_subset.pkl',
+        #     'affi_2024-03-20_15499_subset.pkl'
+        # ]
 
-        for dataset in private_datasets:
-            process_private_dataset(dataset)
+        # for dataset in private_datasets:
+        #     process_private_dataset(dataset)
 
         print("Data preprocessing pipeline completed successfully!")
 

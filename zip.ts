@@ -1,24 +1,26 @@
 /**
  * Script to package submission files into a zip archive.
- *
- * Creates a submission.zip containing:
- * - model.py (the submission model)
- * - model_affi.pth (model weights for affi)
- * - model_beignet.pth (model weights for beignet)
- * - train_data_average_std_affi.npz (normalization stats for affi)
- * - train_data_average_std_beignet.npz (normalization stats for beignet)
- *
  * Usage: npx ts-node zip.ts
- *    or: bun run zip.ts
  */
 
 import * as fs from "fs";
 import * as path from "path";
 import { execSync } from "child_process";
 
-const SUBMISSION_DIR = "./submission";
-const CHECKPOINTS_DIR = "./checkpoints";
-const OUTPUT_ZIP = "./submission.zip";
+// Helper to parse command line arguments
+function getArg(argName: string, defaultValue: string): string {
+  const arg = process.argv.find((a) => a.startsWith(`--${argName}=`));
+  if (arg) {
+    return arg.split("=")[1];
+  }
+  return defaultValue;
+}
+
+// Configuration
+// UPDATED: Defaults to "." (current dir) for model.py and "checkpoints" for weights
+const SUBMISSION_CODE_DIR = getArg("submission_dir", "./submission"); 
+const CHECKPOINTS_DIR = getArg("checkpoints_dir", "./ncheckpoints");
+const OUTPUT_ZIP = getArg("output_zip", "./submission.zip");
 
 interface FileMapping {
   source: string;
@@ -28,104 +30,51 @@ interface FileMapping {
 async function main() {
   console.log("Preparing submission package...\n");
 
-  // Files to include in the submission
   const files: FileMapping[] = [
-    // Model code
+    // 1. The Model Code
     {
-      source: path.join(SUBMISSION_DIR, "model.py"),
+      source: path.join(SUBMISSION_CODE_DIR, "model.py"),
       dest: "model.py",
     },
-    // Model weights (from checkpoints)
+    // 2. Monkey A (Affi)
     {
-      source: path.join(CHECKPOINTS_DIR, "best_model_affi.pt"),
+      source: path.join(CHECKPOINTS_DIR, "model_affi.pth"),
       dest: "model_affi.pth",
     },
     {
-      source: path.join(CHECKPOINTS_DIR, "best_model_beignet.pt"),
-      dest: "model_beignet.pth",
-    },
-    // Normalization stats
-    {
-      source: path.join(CHECKPOINTS_DIR, "norm_stats_affi.npz"),
+      source: path.join(CHECKPOINTS_DIR, "train_data_average_std_affi.npz"),
       dest: "train_data_average_std_affi.npz",
     },
+    // 3. Monkey B (Beignet)
     {
-      source: path.join(CHECKPOINTS_DIR, "norm_stats_beignet.npz"),
+      source: path.join(CHECKPOINTS_DIR, "model_beignet.pth"),
+      dest: "model_beignet.pth",
+    },
+    {
+      source: path.join(CHECKPOINTS_DIR, "train_data_average_std_beignet.npz"),
       dest: "train_data_average_std_beignet.npz",
     },
   ];
 
-  // Check that all source files exist
-  console.log("Checking source files...");
-  const missingFiles: string[] = [];
-  for (const file of files) {
-    if (!fs.existsSync(file.source)) {
-      missingFiles.push(file.source);
-      console.log(`  Missing: ${file.source}`);
-    } else {
-      const stats = fs.statSync(file.source);
-      const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
-      console.log(`  Found: ${file.source} (${sizeMB} MB)`);
-    }
-  }
-
-  if (missingFiles.length > 0) {
-    console.error("\nError: Some required files are missing.");
-    console.error(
-      "Please ensure you have trained the model and have all checkpoint files."
-    );
-    process.exit(1);
-  }
-
-  // Create temporary staging directory
-  const tempDir = "./submission_temp";
+  // Temporary directory for zipping
+  const tempDir = "./temp_submission";
   if (fs.existsSync(tempDir)) {
     fs.rmSync(tempDir, { recursive: true });
   }
-  fs.mkdirSync(tempDir, { recursive: true });
+  fs.mkdirSync(tempDir);
 
-  // Copy files with correct names
-  console.log("\nStaging files...");
+  // Copy files
+  console.log("Copying files:");
   for (const file of files) {
-    const destPath = path.join(tempDir, file.dest);
-    fs.copyFileSync(file.source, destPath);
-    console.log(`  Copied: ${file.source} -> ${file.dest}`);
-  }
-
-  // Extract model weights from checkpoints
-  console.log("\nExtracting model weights...");
-
-  const extractScript = `
-import torch
-import sys
-
-def extract_weights(input_path, output_path):
-    checkpoint = torch.load(input_path, map_location='cpu', weights_only=False)
-    if 'model_state_dict' in checkpoint:
-        state_dict = checkpoint['model_state_dict']
-    else:
-        state_dict = checkpoint
-    torch.save(state_dict, output_path)
-    print(f"  Extracted: {output_path}")
-
-extract_weights('${tempDir}/model_affi.pth', '${tempDir}/model_affi.pth')
-extract_weights('${tempDir}/model_beignet.pth', '${tempDir}/model_beignet.pth')
-`;
-
-  fs.writeFileSync("./extract_weights.py", extractScript);
-
-  try {
-    execSync("python extract_weights.py", { stdio: "inherit" });
-  } catch (e) {
-    try {
-      execSync("python3 extract_weights.py", { stdio: "inherit" });
-    } catch (e2) {
-      console.error("Failed to extract weights.");
+    if (!fs.existsSync(file.source)) {
+      console.error(`❌ Missing expected file: ${file.source}`);
+      console.error(`   Please run ntrainer.py first to generate checkpoints.`);
       process.exit(1);
     }
+    
+    fs.copyFileSync(file.source, path.join(tempDir, file.dest));
+    console.log(`  ✅ ${file.dest}`);
   }
-
-  fs.unlinkSync("./extract_weights.py");
 
   // Remove existing zip
   if (fs.existsSync(OUTPUT_ZIP)) {
@@ -147,6 +96,7 @@ extract_weights('${tempDir}/model_beignet.pth', '${tempDir}/model_beignet.pth')
         stdio: "inherit",
       });
     }
+    console.log(`\n🎉 Submission ready: ${OUTPUT_ZIP}`);
   } catch (e) {
     console.error("Failed to create zip.");
     process.exit(1);
@@ -154,21 +104,6 @@ extract_weights('${tempDir}/model_beignet.pth', '${tempDir}/model_beignet.pth')
 
   // Cleanup
   fs.rmSync(tempDir, { recursive: true });
-
-  // Report
-  const zipStats = fs.statSync(OUTPUT_ZIP);
-  const zipSizeMB = (zipStats.size / (1024 * 1024)).toFixed(2);
-
-  console.log("\n" + "=".repeat(50));
-  console.log(`Submission package created: ${OUTPUT_ZIP}`);
-  console.log(`Size: ${zipSizeMB} MB`);
-  console.log("=".repeat(50));
-
-  console.log("\nContents:");
-  files.forEach((f) => console.log(`  - ${f.dest}`));
 }
 
-main().catch((err) => {
-  console.error("Error:", err);
-  process.exit(1);
-});
+main();
